@@ -1,4 +1,3 @@
-# nodes.py
 import os
 import hashlib
 from typing import TypedDict, List, Dict, Any
@@ -15,6 +14,7 @@ class AgentState(TypedDict):
     sub_queries: List[str]
     current_index: int
     current_sub_query: str
+    target_source: str          # <-- Added to store pre-filtered document source
     retrieved_chunks: List[str]
     is_pdf_sufficient: bool
     sub_query_results: List[Dict[str, Any]]
@@ -24,6 +24,7 @@ class AgentState(TypedDict):
     cached_context: str
 
 DB_PATH = "./chroma_db"
+MASTER_COLLECTION = "knowledge_base" # <-- Updated to master collection
 CACHE_COLLECTION_NAME = "semantic_cache"
 
 def get_gemini_client():
@@ -73,6 +74,63 @@ def advance_subquery(state: AgentState):
         print("\n✅ All sub-queries processed. Proceeding to final synthesis.")
         return {"current_index": next_idx}
 
+def route_subquery_source(state: AgentState):
+    """Routing Node: Inspects available document summaries in ChromaDB and picks the best file for the sub-query."""
+    sub_query = state["current_sub_query"]
+    print(f"🧭 [NODE] Routing Sub-Query to Correct Document Source...")
+    
+    chroma_client = chromadb.PersistentClient(path=DB_PATH)
+    try:
+        collection = chroma_client.get_collection(name=MASTER_COLLECTION)
+        all_data = collection.get(include=["metadatas"])
+        metadatas = all_data.get("metadatas", [])
+        
+        # Map unique sources to their generated summaries
+        doc_map = {}
+        for meta in metadatas:
+            src = meta.get("source")
+            summary = meta.get("summary", "No summary available.")
+            if src and src not in doc_map:
+                doc_map[src] = summary
+        
+        available_sources = list(doc_map.keys())
+    except Exception:
+        available_sources = []
+        doc_map = {}
+        
+    if not available_sources:
+        print("⚠️ [ROUTER] No documents found in database.")
+        return {"target_source": None}
+
+    # If only one source exists, pick it automatically without an extra LLM call
+    if len(available_sources) == 1:
+        chosen = available_sources[0]
+        print(f"📌 [ROUTER] Only one source available, auto-selecting: {chosen}")
+        return {"target_source": chosen}
+
+    # Ask Gemini to map the sub-query to the best matching file summary
+    client = get_gemini_client()
+    menu_str = "\n".join([f"- Filename: {src}\n  Summary: {summary}" for src, summary in doc_map.items()])
+    
+    prompt = f"""You are a document routing assistant. 
+Given the user's sub-query, choose the most relevant document source from the list below based on their summaries.
+Reply ONLY with the exact filename string from the list, nothing else.
+
+Available Documents:
+{menu_str}
+
+Sub-Query: {sub_query}
+"""
+
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    chosen_source = response.text.strip()
+    
+    if chosen_source not in available_sources:
+        chosen_source = available_sources[0] # Fallback safety check
+        
+    print(f"🎯 [ROUTER] Matched sub-query to document: {chosen_source}")
+    return {"target_source": chosen_source}
+
 def check_cache(state: AgentState):
     """Checks the semantic cache for the specific active sub-query."""
     sub_query = state["current_sub_query"]
@@ -92,7 +150,7 @@ def check_cache(state: AgentState):
         print(f"⚡ CACHE HIT! Found identical previous question.")
         return {"is_cache_hit": True, "cached_context": cached_text}
     else:
-        print(f"🐌 CACHE MISS. Proceeding to PDF retrieval.")
+        print(f"🐌 CACHE MISS. Proceeding to vector retrieval.")
         return {"is_cache_hit": False, "cached_context": ""}
 
 def append_cache_result(state: AgentState):
@@ -106,21 +164,33 @@ def append_cache_result(state: AgentState):
     return {"sub_query_results": existing_results}
 
 def retrieve_from_chroma(state: AgentState):
-    """Standard vector retrieval for a Cache Miss."""
+    """Metadata-filtered vector retrieval for a Cache Miss from the master collection."""
     sub_query = state["current_sub_query"]
-    collection_target = state.get("collection_name", "attention_is_all_you_need")
+    target_source = state.get("target_source")
     
     client = get_gemini_client()
     response = client.models.embed_content(model="gemini-embedding-2", contents=sub_query)
     
     chroma_client = chromadb.PersistentClient(path=DB_PATH)
     try:
-        collection = chroma_client.get_collection(name=collection_target)
-        results = collection.query(query_embeddings=[response.embeddings[0].values], n_results=3)
+        collection = chroma_client.get_collection(name=MASTER_COLLECTION)
+        
+        query_args = {
+            "query_embeddings": [response.embeddings[0].values],
+            "n_results": 3
+        }
+        
+        # Apply metadata filtering if a source was targeted by the router
+        if target_source:
+            query_args["where"] = {"source": target_source}
+            
+        results = collection.query(**query_args)
         chunks = results['documents'][0] if results['documents'] else []
-    except Exception:
+    except Exception as e:
+        print(f"❌ Retrieval error: {e}")
         chunks = []
         
+    print(f"🔍 [NODE] Retrieved {len(chunks)} chunks from source: {target_source}")
     return {"retrieved_chunks": chunks}
 
 def grade_retrieved_documents(state: AgentState):
@@ -141,9 +211,10 @@ Reply strictly YES or NO."""
 
 def save_pdf_result(state: AgentState):
     existing = list(state.get("sub_query_results", []))
+    target_src = state.get("target_source", "PDF Document")
     existing.append({
         "sub_query": state["current_sub_query"],
-        "source": "PDF Document",
+        "source": f"PDF ({target_src})",
         "context": "\n".join(state["retrieved_chunks"])
     })
     return {"sub_query_results": existing}

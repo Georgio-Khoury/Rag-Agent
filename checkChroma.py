@@ -53,4 +53,4 @@ def dump_chroma_collection_to_txt(db_path: str, collection_name: str, output_fil
             f.write(error_msg)
 
 # Example Usage:
-dump_chroma_collection_to_txt(db_path="./chroma_db", collection_name="attention_is_all_you_need")
+dump_chroma_collection_to_txt(db_path="./chroma_db", collection_name="knowledge_base")

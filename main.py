@@ -1,59 +1,59 @@
 # main.py
+import os
 from dotenv import load_dotenv
 from graph import create_agent_graph
 
-if __name__ == "__main__":
-    # Ensure environment variables are loaded
+def run_tests():
+    # Load environment variables (.env)
     load_dotenv()
     
-    # 1. Construct and compile the agent application once at boot
-    agent_app = create_agent_graph()
-    print("🚀 Dynamic Agent System Ready for Production Testing!\n" + "="*60)
-    
-    # ==================================================================
-    # TEST CASE 1: Pure PDF Query (Should return TRUE & skip Web Search)
-    # ==================================================================
-    # query_1 = {
-    #     "query": "What are the components of the Multi-Head Attention mechanism?",
-    #     "collection_name": "attention_is_all_you_need"
-    # }
-    # print(f"\n▶️ RUNNING TEST 1: Pure PDF Information Retrieval...")
-    # output_1 = agent_app.invoke(query_1)
-    # print("\n🏁 FINAL RESPONSE 1:")
-    # print(output_1["final_response"])
-    # print("="*60)
-    
-    # ==================================================================
-    # TEST CASE 2: Multi-Topic PDF Query (Should return TRUE & skip Web Search)
-    # This asks for two completely distinct concepts that both live in the PDF.
-    # ==================================================================
-    #query_2 = {
-    #     "query": "Explain what the Scaled Dot-Product Attention formula is AND tell me what optimizer was used to train the model.",
-    #     "collection_name": "attention_is_all_you_need"
-    # }
-    # print(f"\n▶️ RUNNING TEST 2: Multi-Topic Query (All internal to PDF)...")
-    # output_2 = agent_app.invoke(query_2)
-    # print("\n🏁 FINAL RESPONSE 2:")
-    # print(output_2["final_response"])
-    # print("="*60)
+    # Verify API key is present
+    if not os.environ.get("GEMINI_API_KEY"):
+        print("❌ ERROR: GEMINI_API_KEY is missing from environment variables or .env file.")
+        return
 
-    query_test = {
-        "query": "Explain to me what happened in the Lebanese Civil war, and also explain to me about the components of multi threaded attention mechanism and which optimizer did we use to train the model?",
-        "collection_name":"attention_is_all_you_need"
-    }
-    output_test = agent_app.invoke(query_test)
-    print(output_test["final_response"])
-    
-    # ==================================================================
-    # TEST CASE 3: Mixed-Context Query (Should return FALSE & trigger multi-query Web Search)
-    # One topic is inside the PDF, the other must be sourced live from the web.
-    # ==================================================================
-    # query_3 = {
-    #     "query": "What is the specific dimensionality parameter d_k used in the paper, and who is the current CEO of Google?",
-    #     "collection_name": "attention_is_all_you_need"
-    # }
-    # print(f"\n▶️ RUNNING TEST 3: Mixed-Context Compound Query (PDF + Web)...")
-    # output_3 = agent_app.invoke(query_3)
-    # print("\n🏁 FINAL RESPONSE 3:")
-    # print(output_3["final_response"])
-    # print("="*60)
+    # Compile the LangGraph agent
+    app = create_agent_graph()
+
+    # Define test cases
+    test_queries = [
+        #"What is the d_k parameter mentioned in the document?",
+        #"Explain the self-attention mechanism and compare it to modern breakthroughs in quantum computing."
+        #"Give me a list of the basic human rights and also what is causing the global warming?"
+        #"What is the main compound that contributes to the thickening of the ozone layer and what's teh link with human rights?"
+        "Does climate change have any effect on the water sea levels and on the united kinddom??"
+    ]
+
+    for i, query in enumerate(test_queries, 1):
+        print(f"\n\n==========================================")
+        print(f"🧪 TEST CASE {i}: {query}")
+        print(f"==========================================")
+        
+        initial_state = {
+            "query": query,
+            "collection_name": "knowledge_base",
+            "sub_queries": [],
+            "current_index": -1,
+            "current_sub_query": "",
+            "target_source": "",
+            "retrieved_chunks": [],
+            "is_pdf_sufficient": False,
+            "sub_query_results": [],
+            "final_response": "",
+            "is_cache_hit": False,
+            "cached_context": ""
+        }
+        
+        try:
+            # Run the graph
+            final_state = app.invoke(initial_state)
+            
+            print(f"\n🏁 --- FINAL RESPONSE FOR TEST {i} ---")
+            print(final_state.get("final_response", "No response generated."))
+            print(f"-----------------------------------------\n")
+            
+        except Exception as e:
+            print(f"❌ Error running test case {i}: {e}")
+
+if __name__ == "__main__":
+    run_tests()
