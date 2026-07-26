@@ -39,28 +39,28 @@ def create_agent_graph():
     workflow.add_edge(START, "decompose")
     workflow.add_edge("decompose", "advance")
     
-    # 3. The Central Loop Router
+   # 3. The Central Loop Router (Points to Cache Check first)
     workflow.add_conditional_edges(
         "advance",
         route_loop_check,
         {
-            "loop": "route_source",   # Sub-query exists: route to appropriate doc source first
+            "loop": "check_cache",   # Check cache first for the sub-query!
             "finish": "generate"      # No more sub-queries: generate final answer
         }
     )
     
-    # 4. Route from document selector to cache check
-    workflow.add_edge("route_source", "check_cache")
-    
-    # 5. The Cache Router
+    # 4. The Cache Router
     workflow.add_conditional_edges(
         "check_cache",
         route_cache_check,
         {
-            "append_cache": "append_cache", # HIT: Bypass RAG
-            "retrieve": "retrieve"          # MISS: Start RAG with metadata filtering
+            "append_cache": "append_cache", # HIT: Bypass RAG completely
+            "retrieve": "route_source"      # MISS: Now route to source & pull from Chroma
         }
     )
+    
+    # 5. Route source
+    workflow.add_edge("route_source","retrieve")
     
     # 6. RAG Pipeline (Cache Miss)
     workflow.add_edge("retrieve", "grade")
